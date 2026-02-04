@@ -1,6 +1,79 @@
 const jwt = require('jsonwebtoken');
 const Agent = require('../models/Agent');
 
+// @desc    Register new agent/admin
+// @route   POST /api/auth/register
+// @access  Public
+exports.register = async (req, res) => {
+  try {
+    const { name, email, password, companyName } = req.body;
+    const Role = require('../models/Role'); // Import Role model inside function to avoid circular deps if any
+
+    // Validate input
+    if (!email || !password || !name) {
+      return res.status(400).json({ error: 'Please provide all required fields' });
+    }
+
+    // Check if user exists
+    const userExists = await Agent.findOne({ email });
+    if (userExists) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
+
+    // Find or create 'Admin' role
+    let adminRole = await Role.findOne({ name: 'Admin' });
+    if (!adminRole) {
+      // Seed Admin role if not exists
+      adminRole = await Role.create({
+        name: 'Admin',
+        permissions: {
+          canViewAllChats: true,
+          canManageAgents: true,
+          canManageSettings: true,
+          canViewAnalytics: true,
+          canExportData: true
+        }
+      });
+    }
+
+    // Create user
+    const agent = await Agent.create({
+      name,
+      displayName: name,
+      email,
+      password,
+      roleId: adminRole._id,
+      tagline: companyName || 'Administrator',
+      enabled: true,
+      online: true,
+      lastLogin: new Date()
+    });
+
+    // Generate token
+    const token = jwt.sign(
+      { id: agent._id, email: agent.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.status(201).json({
+      success: true,
+      token,
+      agent: {
+        id: agent._id,
+        name: agent.name,
+        email: agent.email,
+        role: adminRole, // Send full role object or at least name to frontend
+        avatar: agent.avatar
+      }
+    });
+
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
 // @desc    Login agent
 // @route   POST /api/auth/login
 // @access  Public

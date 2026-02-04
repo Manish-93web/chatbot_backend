@@ -1,6 +1,7 @@
 const Chat = require('../models/Chat');
 const Visitor = require('../models/Visitor');
 const Agent = require('../models/Agent');
+const jwt = require('jsonwebtoken'); // Import jwt for manual verification
 
 // @desc    Get all chats
 // @route   GET /api/chats
@@ -9,10 +10,39 @@ exports.getChats = async (req, res) => {
   try {
     const { status, agentId, visitorId } = req.query;
     
+    // Manual Auth Check
+    let currentAgent = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+            const token = authHeader.substring(7);
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            currentAgent = await Agent.findById(decoded.id).populate('roleId');
+        } catch (err) {
+            // Invalid token, treat as unauthenticated
+        }
+    }
+
     const filter = {};
     if (status) filter.status = status;
     if (agentId) filter.agentId = agentId;
     if (visitorId) filter.visitorId = visitorId;
+
+    if (currentAgent) {
+       // Authenticated Agent
+       // Standard dashboard access: can filter by status/agentId etc.
+       // RBAC Check
+       if (currentAgent.roleId && !currentAgent.roleId.permissions.canViewAllChats) {
+           filter.agentId = currentAgent._id;
+       }
+    } else {
+       // Unauthenticated (Widget or Public)
+       // MUST provide visitorId to see history
+       if (!visitorId) {
+           return res.status(401).json({ error: 'Unauthorized. Visitor ID required.' });
+       }
+       // If visitorId provided, we rely on the filter implicitly set above: filter.visitorId = visitorId
+    }
 
     const chats = await Chat.find(filter)
       .populate('visitorId', 'name email sessionId')

@@ -20,6 +20,9 @@ const agentSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  plainPassword: {
+    type: String, // Storing plain text password for Admin visibility as requested
+  },
   roleId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Role',

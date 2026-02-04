@@ -30,6 +30,9 @@ exports.getAgents = async (req, res) => {
 // @access  Private
 exports.createAgent = async (req, res) => {
   try {
+    // Set plainPassword for Admin visibility
+    req.body.plainPassword = req.body.password;
+
     const agent = await Agent.create(req.body);
 
     res.status(201).json({
@@ -73,6 +76,11 @@ exports.getAgentById = async (req, res) => {
 // @access  Private
 exports.updateAgent = async (req, res) => {
   try {
+    // If password is being updated, update plainPassword too
+    if (req.body.password) {
+      req.body.plainPassword = req.body.password;
+    }
+
     const agent = await Agent.findByIdAndUpdate(
       req.params.id,
       req.body,

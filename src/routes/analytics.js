@@ -7,6 +7,7 @@ const authMiddleware = require('../middleware/auth');
 router.use(authMiddleware);
 
 router.get('/overview', analyticsController.getOverview);
+router.get('/realtime', analyticsController.getRealtime);
 router.get('/agents', analyticsController.getAgentAnalytics);
 
 module.exports = router;

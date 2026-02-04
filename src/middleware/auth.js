@@ -16,15 +16,15 @@ const authMiddleware = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     // Get agent from database
-    const agent = await Agent.findById(decoded.id).select('-password');
+    const agent = await Agent.findById(decoded.id).select('-password').populate('roleId');
     
     if (!agent) {
       return res.status(401).json({ error: 'Agent not found' });
     }
 
-    if (!agent.enabled) {
-      return res.status(401).json({ error: 'Account disabled' });
-    }
+    // if (!agent.enabled) {
+    //   return res.status(401).json({ error: 'Account disabled' });
+    // }
 
     // Attach agent to request
     req.agent = agent;

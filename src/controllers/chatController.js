@@ -33,7 +33,11 @@ exports.getChats = async (req, res) => {
        // Standard dashboard access: can filter by status/agentId etc.
        // RBAC Check
        if (currentAgent.roleId && !currentAgent.roleId.permissions.canViewAllChats) {
-           filter.agentId = currentAgent._id;
+           // Agents can see chats assigned to them OR unassigned chats
+           filter.$or = [
+               { agentId: currentAgent._id },
+               { agentId: null }
+           ];
        }
     } else {
        // Unauthenticated (Widget or Public)
@@ -127,7 +131,7 @@ exports.getChatById = async (req, res) => {
 // @access  Private
 exports.updateChat = async (req, res) => {
   try {
-    const { agentId, status, satisfaction, tags, notes, departmentId } = req.body;
+    const { agentId, status, satisfaction, tags, notes, departmentId, onHold } = req.body;
 
     const chat = await Chat.findById(req.params.id);
     if (!chat) {
@@ -157,6 +161,7 @@ exports.updateChat = async (req, res) => {
     if (tags !== undefined) chat.tags = tags;
     if (notes !== undefined) chat.notes = notes;
     if (departmentId !== undefined) chat.departmentId = departmentId;
+    if (onHold !== undefined) chat.onHold = onHold;
 
     await chat.save();
 

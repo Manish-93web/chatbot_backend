@@ -44,6 +44,10 @@ const visitorSchema = new mongoose.Schema({
     type: Map,
     of: String,
   },
+  isBanned: {
+    type: Boolean,
+    default: false,
+  },
 }, {
   timestamps: true,
 });

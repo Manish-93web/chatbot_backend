@@ -156,6 +156,44 @@ const initializeSocketServer = (server) => {
       }
     });
 
+    // Chat transfer
+    socket.on('chat:transfer', async (data) => {
+      console.log('Transferring chat:', data);
+
+      try {
+        const chat = await Chat.findById(data.chatId).populate('visitorId');
+        if (!chat) return;
+
+        const oldAgentId = chat.agentId;
+        chat.agentId = data.toAgentId;
+        chat.status = 'active';
+        await chat.save();
+
+        // Notify new agent
+        io.to(`agent:${data.toAgentId}`).emit('chat:assigned', chat);
+        
+        // Notify visitor
+        io.to(`visitor:${chat.visitorId._id}`).emit('chat:agent_joined', {
+          chatId: data.chatId,
+          agentId: data.toAgentId,
+        });
+
+        // Notify session update to all (for lists)
+        io.emit('chat:updated', chat);
+        
+        // Notify original agent if they are still connected
+        if (oldAgentId) {
+          io.to(`agent:${oldAgentId}`).emit('chat:transferred', {
+            chatId: data.chatId,
+            toAgentId: data.toAgentId
+          });
+        }
+      } catch (error) {
+        console.error('Error transferring chat:', error);
+        socket.emit('chat:error', { error: 'Failed to transfer chat' });
+      }
+    });
+
     // Chat completion
     socket.on('chat:complete', async (data) => {
       console.log('Completing chat:', data);

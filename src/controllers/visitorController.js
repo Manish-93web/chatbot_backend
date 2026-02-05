@@ -10,11 +10,22 @@ exports.getVisitors = async (req, res) => {
     const filter = {};
     if (online !== undefined) filter.online = online === 'true';
 
-    const visitors = await Visitor.find(filter).sort({ lastVisit: -1 });
+    const visitors = await Visitor.find(filter).sort({ lastVisit: -1 }).lean();
+
+    // For each visitor, find if they have an active chat
+    const Chat = require('../models/Chat');
+    const visitorsWithChat = await Promise.all(visitors.map(async (v) => {
+      const activeChat = await Chat.findOne({ visitorId: v._id, status: { $in: ['active', 'pending'] } });
+      return {
+        ...v,
+        activeChatId: activeChat ? activeChat._id : null,
+        onHold: activeChat ? activeChat.onHold : false
+      };
+    }));
 
     res.json({
       success: true,
-      visitors,
+      visitors: visitorsWithChat,
     });
   } catch (error) {
     console.error('Get visitors error:', error);
@@ -115,7 +126,7 @@ exports.getVisitorById = async (req, res) => {
 // @access  Public/Private
 exports.updateVisitor = async (req, res) => {
   try {
-    const { online, currentPage, name, email, customData } = req.body;
+    const { online, currentPage, name, email, customData, isBanned } = req.body;
 
     const visitor = await Visitor.findById(req.params.id);
     if (!visitor) {
@@ -129,6 +140,7 @@ exports.updateVisitor = async (req, res) => {
     if (req.body.phone !== undefined) visitor.phone = req.body.phone;
     if (req.body.reason !== undefined) visitor.reason = req.body.reason;
     if (customData !== undefined) visitor.customData = customData;
+    if (isBanned !== undefined) visitor.isBanned = isBanned;
 
     await visitor.save();
 

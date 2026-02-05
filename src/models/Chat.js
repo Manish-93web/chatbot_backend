@@ -39,6 +39,10 @@ const chatSchema = new mongoose.Schema({
     type: Map,
     of: String,
   },
+  onHold: {
+    type: Boolean,
+    default: false,
+  },
 }, {
   timestamps: true,
 });

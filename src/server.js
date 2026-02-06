@@ -34,23 +34,36 @@ app.use((req, res, next) => {
   next();
 });
 
-// API Routes
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/chats', require('./routes/chats'));
-app.use('/api/messages', require('./routes/messages'));
-app.use('/api/visitors', require('./routes/visitors'));
-app.use('/api/agents', require('./routes/agents'));
-app.use('/api/departments', require('./routes/departments'));
-app.use('/api/roles', require('./routes/roles'));
-app.use('/api/shortcuts', require('./routes/shortcuts'));
-app.use('/api/triggers', require('./routes/triggers'));
-app.use('/api/analytics', require('./routes/analytics'));
-app.use('/api/widget', require('./routes/widget'));
-
-// Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is running' });
 });
+
+// Static folder for uploads
+app.use('/uploads', express.static('uploads'));
+
+const { standardLimiter, authLimiter, widgetLimiter } = require('./middleware/rateLimiter');
+
+// API Routes
+app.use('/api/auth', authLimiter, require('./routes/auth'));
+app.use('/api/chats', standardLimiter, require('./routes/chats'));
+app.use('/api/messages', standardLimiter, require('./routes/messages'));
+app.use('/api/visitors', standardLimiter, require('./routes/visitors'));
+app.use('/api/agents', standardLimiter, require('./routes/agents'));
+app.use('/api/departments', standardLimiter, require('./routes/departments'));
+app.use('/api/roles', standardLimiter, require('./routes/roles'));
+app.use('/api/shortcuts', standardLimiter, require('./routes/shortcuts'));
+app.use('/api/triggers', standardLimiter, require('./routes/triggers'));
+app.use('/api/analytics', standardLimiter, require('./routes/analytics'));
+app.use('/api/widget', widgetLimiter, require('./routes/widget'));
+app.use('/api/tickets', standardLimiter, require('./routes/tickets'));
+app.use('/api/ratings', standardLimiter, require('./routes/ratings'));
+app.use('/api/kb', standardLimiter, require('./routes/kb'));
+app.use('/api/admin', standardLimiter, require('./routes/admin'));
+app.use('/api/upload', standardLimiter, require('./routes/upload'));
+app.use('/api/omni', standardLimiter, require('./routes/omni'));
+app.use('/api/issue-categories', standardLimiter, require('./routes/issueCategories'));
+app.use('/api/subscriptions', standardLimiter, require('./routes/subscriptions'));
+
 
 // 404 handler
 app.use((req, res) => {

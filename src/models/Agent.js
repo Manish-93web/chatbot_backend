@@ -51,9 +51,10 @@ const agentSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
-  online: {
-    type: Boolean,
-    default: false,
+  status: {
+    type: String,
+    enum: ['online', 'busy', 'away', 'offline'],
+    default: 'offline',
   },
   lastLogin: Date,
   preferences: {
@@ -73,6 +74,10 @@ const agentSchema = new mongoose.Schema({
   idleTimeout: {
     type: Number,
     default: 10,
+  },
+  lastSeen: {
+    type: Date,
+    default: Date.now,
   },
 }, {
   timestamps: true,

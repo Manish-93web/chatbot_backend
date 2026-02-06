@@ -34,6 +34,20 @@ const messageSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  isInternal: {
+    type: Boolean,
+    default: false,
+  },
+  whisperTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Agent',
+  },
+  translated: {
+    content: String,
+    language: String,
+    provider: String,
+  },
+  detectedLanguage: String,
 }, {
   timestamps: true,
 });

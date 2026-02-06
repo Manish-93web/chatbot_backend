@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const departmentController = require('../controllers/departmentController');
-const { protect } = require('../middleware/auth');
+const { protect, authorize } = require('../middleware/auth');
 
-router.use(protect);
+router.use(protect, authorize('admin'));
 
 router.get('/', departmentController.getDepartments);
 router.post('/', departmentController.createDepartment);

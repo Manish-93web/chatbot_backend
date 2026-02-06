@@ -48,6 +48,28 @@ const visitorSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  gdprConsent: {
+    type: Boolean,
+    default: false,
+  },
+  consentTimestamp: Date,
+  subscriptionId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Subscription',
+  },
+  warranty: {
+    serialNumber: String,
+    expiryDate: Date,
+    status: {
+      type: String,
+      enum: ['valid', 'expired', 'none'],
+      default: 'none',
+    },
+  },
+  lastSeen: {
+    type: Date,
+    default: Date.now,
+  },
 }, {
   timestamps: true,
 });

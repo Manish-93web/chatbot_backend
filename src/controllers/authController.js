@@ -102,6 +102,18 @@ exports.login = async (req, res) => {
     const isMatch = await agent.comparePassword(password);
 
     if (!isMatch) {
+      const { logAction } = require('../services/auditService');
+      await logAction({
+        userId: agent._id,
+        userType: 'agent',
+        action: 'failed_login',
+        resource: 'agent',
+        resourceId: agent._id,
+        ipAddress: req.ip,
+        severity: 'medium',
+        success: false,
+        errorMessage: 'Invalid password'
+      });
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
@@ -109,6 +121,18 @@ exports.login = async (req, res) => {
     agent.lastLogin = new Date();
     agent.online = true;
     await agent.save();
+
+    // Log successful login
+    const { logAction } = require('../services/auditService');
+    await logAction({
+        userId: agent._id,
+        userType: 'agent',
+        action: 'login',
+        resource: 'agent',
+        resourceId: agent._id,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent']
+    });
 
     // Generate JWT token
     const token = jwt.sign(
@@ -133,6 +157,16 @@ exports.login = async (req, res) => {
 // @access  Private
 exports.logout = async (req, res) => {
   try {
+    // Log logout
+    const { logAction } = require('../services/auditService');
+    await logAction({
+        userId: req.agent._id,
+        userType: 'agent',
+        action: 'logout',
+        resource: 'agent',
+        resourceId: req.agent._id
+    });
+
     // Update agent online status
     await Agent.findByIdAndUpdate(req.agent._id, { online: false });
 

@@ -9,5 +9,8 @@ router.use(authMiddleware);
 router.get('/overview', analyticsController.getOverview);
 router.get('/realtime', analyticsController.getRealtime);
 router.get('/agents', analyticsController.getAgentAnalytics);
+router.get('/heatmap', analyticsController.getHeatmap);
+router.get('/export', analyticsController.exportCSV);
+router.get('/logs', analyticsController.getAuditLogs);
 
 module.exports = router;

@@ -60,186 +60,182 @@ const initializeSocketServer = (server) => {
       console.log('Joining chat:', data.chatId);
       socket.data.chatId = data.chatId;
       socket.join(`chat:${data.chatId}`);
+      
+      // If user is an agent, also join the internal room for this chat
+      if (socket.data.userType === 'agent') {
+          socket.join(`chat:${data.chatId}:internal`);
+      }
     });
 
     // Leave chat room
     socket.on('chat:leave', (data) => {
       console.log('Leaving chat:', data.chatId);
       socket.leave(`chat:${data.chatId}`);
+      if (socket.data.userType === 'agent') {
+          socket.leave(`chat:${data.chatId}:internal`);
+      }
       socket.data.chatId = undefined;
     });
 
-    // Send message
-    socket.on('message:send', async (data) => {
+    // Send message with ACK
+    socket.on('message:send', async (data, callback) => {
       console.log('New message:', data);
 
       try {
-        // Ensure visitor is marked as online if they are sending a message
         if (data.senderType === 'visitor') {
-          await Visitor.findByIdAndUpdate(data.senderId, { online: true });
+          await Visitor.findByIdAndUpdate(data.senderId, { online: true, lastSeen: new Date() });
+        } else {
+          const Agent = require('../models/Agent');
+          await Agent.findByIdAndUpdate(data.senderId, { lastSeen: new Date() });
         }
-        // Create message in database
+        
+        if (data.isInternal && data.senderType !== 'agent') {
+             data.isInternal = false;
+        }
+
         const message = await Message.create({
           chatId: data.chatId,
           senderId: data.senderId,
           senderType: data.senderType,
           content: data.content,
           type: data.type || 'text',
+          isInternal: data.isInternal || false,
         });
 
-        // Broadcast to chat room
-        io.to(`chat:${data.chatId}`).emit('message:new', message);
+        if (message.isInternal) {
+            io.to(`chat:${data.chatId}:internal`).emit('message:new', message);
+        } else {
+            io.to(`chat:${data.chatId}`).emit('message:new', message);
+        }
 
-        // Send notifications to agents
         io.emit('agent:notification', {
           type: 'message',
           chatId: data.chatId,
           message,
         });
 
-        // Specific notifications for joined agents
         const chat = await Chat.findById(data.chatId);
-        if (chat) {
-          if (chat.agentId) {
+        if (chat && chat.agentId) {
             io.to(`agent:${chat.agentId}`).emit('message:notification', {
               chatId: data.chatId,
               message,
             });
-          }
         }
+
+        // Send acknowledgment back to sender
+        if (callback) callback({ success: true, messageId: message._id });
+
       } catch (error) {
         console.error('Error sending message:', error);
+        if (callback) callback({ success: false, error: 'Failed to send message' });
         socket.emit('message:error', { error: 'Failed to send message' });
       }
     });
 
-    // Typing indicators
-    socket.on('typing:start', (data) => {
-      socket.to(`chat:${data.chatId}`).emit('typing:indicator', {
-        chatId: data.chatId,
-        userId: data.userId,
-        userType: data.userType,
-        isTyping: true,
-      });
-    });
-
-    socket.on('typing:stop', (data) => {
-      socket.to(`chat:${data.chatId}`).emit('typing:indicator', {
-        chatId: data.chatId,
-        userId: data.userId,
-        isTyping: false,
-      });
-    });
-
-    // Chat assignment
-    socket.on('chat:assign', async (data) => {
-      console.log('Assigning chat:', data);
-
-      try {
-        const chat = await Chat.findByIdAndUpdate(
-          data.chatId,
-          { agentId: data.agentId, status: 'active' },
-          { new: true }
-        ).populate('visitorId agentId');
-
-        if (chat) {
-          io.to(`agent:${data.agentId}`).emit('chat:assigned', chat);
-          io.to(`visitor:${chat.visitorId._id}`).emit('chat:agent_joined', {
-            chatId: data.chatId,
-            agentId: data.agentId,
-          });
-          io.emit('chat:updated', chat);
+    // Heartbeat
+    socket.on('heartbeat', async () => {
+        const { userId, userType } = socket.data;
+        if (userId) {
+            if (userType === 'visitor') {
+                await Visitor.findByIdAndUpdate(userId, { lastSeen: new Date(), online: true });
+            } else if (userType === 'agent') {
+                const Agent = require('../models/Agent');
+                await Agent.findByIdAndUpdate(userId, { lastSeen: new Date() });
+            }
         }
-      } catch (error) {
-        console.error('Error assigning chat:', error);
-        socket.emit('chat:error', { error: 'Failed to assign chat' });
-      }
     });
 
-    // Chat transfer
-    socket.on('chat:transfer', async (data) => {
-      console.log('Transferring chat:', data);
+    // Supervisor Takeover
+    socket.on('agent:takeover', async (data) => {
+        const { chatId, supervisorId } = data;
+        try {
+            const chat = await Chat.findById(chatId);
+            if (!chat) return;
 
-      try {
-        const chat = await Chat.findById(data.chatId).populate('visitorId');
-        if (!chat) return;
+            const oldAgentId = chat.agentId;
+            chat.agentId = supervisorId;
+            chat.status = 'active';
+            await chat.save();
 
-        const oldAgentId = chat.agentId;
-        chat.agentId = data.toAgentId;
-        chat.status = 'active';
-        await chat.save();
+            const Agent = require('../models/Agent');
+            if (oldAgentId) {
+                await Agent.findByIdAndUpdate(oldAgentId, { $inc: { currentChats: -1 } });
+            }
+            await Agent.findByIdAndUpdate(supervisorId, { $inc: { currentChats: 1, totalChats: 1 } });
 
-        // Notify new agent
-        io.to(`agent:${data.toAgentId}`).emit('chat:assigned', chat);
-        
-        // Notify visitor
-        io.to(`visitor:${chat.visitorId._id}`).emit('chat:agent_joined', {
-          chatId: data.chatId,
-          agentId: data.toAgentId,
+            const populatedChat = await Chat.findById(chatId)
+                .populate('agentId', 'name displayName avatar')
+                .populate('visitorId', 'name email');
+
+            io.to(`chat:${chatId}`).emit('chat:updated', populatedChat);
+            io.to(`chat:${chatId}`).emit('chat:assigned', populatedChat);
+            
+            // Notify old agent
+            if (oldAgentId) {
+                io.to(`agent:${oldAgentId}`).emit('chat:taken_over', { chatId, supervisorId });
+            }
+
+            // System message for takeover
+            const sysMsg = await Message.create({
+                chatId,
+                senderId: 'system',
+                senderType: 'system',
+                content: 'A supervisor has taken over this conversation.',
+                isInternal: false
+            });
+            io.to(`chat:${chatId}`).emit('message:new', sysMsg);
+
+        } catch (error) {
+            console.error('Takeover error:', error);
+        }
+    });
+
+    // Agent Direct Message (Internal Chat)
+    socket.on('agent:direct_message', async (data) => {
+        const { senderId, receiverId, content } = data;
+        // This is a simplified version - in a production app, you'd store this in a DirectMessage model
+        io.to(`agent:${receiverId}`).emit('agent:direct_message', {
+            senderId,
+            content,
+            sentAt: new Date()
         });
-
-        // Notify session update to all (for lists)
-        io.emit('chat:updated', chat);
-        
-        // Notify original agent if they are still connected
-        if (oldAgentId) {
-          io.to(`agent:${oldAgentId}`).emit('chat:transferred', {
-            chatId: data.chatId,
-            toAgentId: data.toAgentId
-          });
-        }
-      } catch (error) {
-        console.error('Error transferring chat:', error);
-        socket.emit('chat:error', { error: 'Failed to transfer chat' });
-      }
+        socket.emit('agent:direct_message', {
+            senderId,
+            receiverId,
+            content,
+            sentAt: new Date(),
+            delivered: true
+        });
     });
 
-    // Chat completion
-    socket.on('chat:complete', async (data) => {
-      console.log('Completing chat:', data);
-
-      try {
-        const chat = await Chat.findByIdAndUpdate(
-          data.chatId,
-          {
-            status: 'completed',
-            endTime: new Date(),
-            satisfaction: data.satisfaction,
-          },
-          { new: true }
-        );
-
-        if (chat) {
-          io.to(`chat:${data.chatId}`).emit('chat:completed', chat);
-          io.emit('chat:updated', chat);
-        }
-      } catch (error) {
-        console.error('Error completing chat:', error);
-        socket.emit('chat:error', { error: 'Failed to complete chat' });
-      }
-    });
-
-    // Agent status
-    socket.on('agent:status', (data) => {
-      console.log('Agent status change:', data);
-      io.emit('agent:status', data);
-    });
-
-    // Disconnect
+    // Disconnect with Grace Period
     socket.on('disconnect', async () => {
       console.log('Client disconnected:', socket.id);
-
       const { userId, userType } = socket.data;
 
-      if (userType === 'visitor' && userId) {
-        await Visitor.findByIdAndUpdate(userId, { online: false });
-        io.emit('visitor:offline', { visitorId: userId });
-      } else if (userType === 'agent' && userId) {
-        io.emit('agent:status', {
-          agentId: userId,
-          status: 'offline',
-        });
-      }
+      if (!userId) return;
+
+      // Wait 5 seconds to see if they reconnect before marking offline
+      setTimeout(async () => {
+          // Check if user has any other active connections
+          const remainingSockets = await io.fetchSockets();
+          const isStillConnected = remainingSockets.some(s => s.data.userId === userId);
+
+          if (!isStillConnected) {
+              if (userType === 'visitor') {
+                await Visitor.findByIdAndUpdate(userId, { online: false });
+                io.emit('visitor:offline', { visitorId: userId });
+              } else if (userType === 'agent') {
+                 const Agent = require('../models/Agent');
+                 await Agent.findByIdAndUpdate(userId, { status: 'offline' });
+                
+                io.emit('agent:status', {
+                  agentId: userId,
+                  status: 'offline',
+                });
+              }
+          }
+      }, 5000);
     });
   });
 

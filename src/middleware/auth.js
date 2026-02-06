@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 const Agent = require('../models/Agent');
 
-const authMiddleware = async (req, res, next) => {
+const protect = async (req, res, next) => {
   try {
     // Get token from header
     const authHeader = req.headers.authorization;
@@ -22,10 +22,6 @@ const authMiddleware = async (req, res, next) => {
       return res.status(401).json({ error: 'Agent not found' });
     }
 
-    // if (!agent.enabled) {
-    //   return res.status(401).json({ error: 'Account disabled' });
-    // }
-
     // Attach agent to request
     req.agent = agent;
     next();
@@ -40,6 +36,28 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-// Export as both default function and named property 'protect'
-authMiddleware.protect = authMiddleware;
-module.exports = authMiddleware;
+// Grant access to specific roles
+const authorize = (...roles) => {
+  return (req, res, next) => {
+    if (!req.agent || !req.agent.roleId) {
+      return res.status(403).json({ error: 'User role not found' });
+    }
+
+    // Check if role name matches (case-insensitive for convenience)
+    const roleName = req.agent.roleId.name.toLowerCase();
+    const authorized = roles.some(role => role.toLowerCase() === roleName);
+
+    if (!authorized) {
+      return res.status(403).json({ 
+        error: `Agent role ${req.agent.roleId.name} is not authorized to access this route` 
+      });
+    }
+    next();
+  };
+};
+
+const auth = protect;
+auth.protect = protect;
+auth.authorize = authorize;
+
+module.exports = auth;

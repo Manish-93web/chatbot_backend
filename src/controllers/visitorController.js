@@ -160,4 +160,94 @@ exports.updateVisitor = async (req, res) => {
   }
 };
 
+// @desc    Validate device warranty
+// @route   POST /api/visitors/:id/warranty
+// @access  Public
+exports.validateWarranty = async (req, res) => {
+  try {
+    const { serialNumber } = req.body;
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) {
+      return res.status(404).json({ error: 'Visitor not found' });
+    }
+
+    // SIMULATION LOGIC
+    // In a real system, would call an external warranty API
+    let subscriptionName = 'Free';
+    let status = 'none';
+    let expiryDate = null;
+
+    if (serialNumber.startsWith('WARRANTY-PLATINUM')) {
+        subscriptionName = 'Platinum';
+        status = 'valid';
+        expiryDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    } else if (serialNumber.startsWith('WARRANTY-GOLD')) {
+        subscriptionName = 'Gold';
+        status = 'valid';
+        expiryDate = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+    } else if (serialNumber.startsWith('WARRANTY-SILVER')) {
+        subscriptionName = 'Silver';
+        status = 'valid';
+        expiryDate = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+    } else if (serialNumber === 'EXPIRED') {
+        status = 'expired';
+        expiryDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+    }
+
+    const Subscription = require('../models/Subscription');
+    const subscription = await Subscription.findOne({ name: subscriptionName });
+
+    visitor.warranty = {
+        serialNumber,
+        expiryDate,
+        status
+    };
+    if (subscription) {
+        visitor.subscriptionId = subscription._id;
+    }
+
+    await visitor.save();
+
+    res.json({
+        success: true,
+        message: status === 'valid' ? `Warranty validated! Upgraded to ${subscriptionName} support.` : 'Warranty validation failed or expired.',
+        visitor: await Visitor.findById(visitor._id).populate('subscriptionId')
+    });
+
+  } catch (error) {
+    console.error('Warranty validation error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// @desc    Upgrade subscription manually (Mock payment)
+// @route   POST /api/visitors/:id/upgrade
+// @access  Public
+exports.upgradeSubscription = async (req, res) => {
+    try {
+        const { tierName } = req.body;
+        const Subscription = require('../models/Subscription');
+        const subscription = await Subscription.findOne({ name: tierName });
+        
+        if (!subscription) {
+            return res.status(404).json({ error: 'Subscription tier not found' });
+        }
+
+        const visitor = await Visitor.findByIdAndUpdate(
+            req.params.id,
+            { subscriptionId: subscription._id },
+            { new: true }
+        ).populate('subscriptionId');
+
+        res.json({
+            success: true,
+            message: `Successfully upgraded to ${tierName} plan!`,
+            visitor
+        });
+    } catch (error) {
+        console.error('Upgrade subscription error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
 module.exports = exports;

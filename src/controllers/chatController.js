@@ -1,6 +1,7 @@
 const Chat = require('../models/Chat');
 const Visitor = require('../models/Visitor');
 const Agent = require('../models/Agent');
+const IssueCategory = require('../models/IssueCategory');
 const jwt = require('jsonwebtoken'); // Import jwt for manual verification
 
 // @desc    Get all chats
@@ -49,8 +50,12 @@ exports.getChats = async (req, res) => {
     }
 
     const chats = await Chat.find(filter)
-      .populate('visitorId', 'name email sessionId')
-      .populate('agentId', 'name displayName avatar')
+      .populate({
+        path: 'visitorId',
+        select: 'name email sessionId subscriptionId',
+        populate: { path: 'subscriptionId' }
+      })
+      .populate('agentId', 'name displayName avatar rating tagline') 
       .populate('departmentId', 'name')
       .sort({ startTime: -1 });
 
@@ -69,19 +74,39 @@ exports.getChats = async (req, res) => {
 // @access  Public
 exports.createChat = async (req, res) => {
   try {
-    const { visitorId, departmentId } = req.body;
+    const { visitorId, departmentId, categoryId } = req.body;
 
-    // Verify visitor exists
-    const visitor = await Visitor.findById(visitorId);
+    // Verify visitor exists and populate subscription
+    const visitor = await Visitor.findById(visitorId).populate('subscriptionId');
     if (!visitor) {
       return res.status(404).json({ error: 'Visitor not found' });
     }
+
+    const priorityLevel = visitor.subscriptionId ? visitor.subscriptionId.priorityLevel : 1;
+    const isPremium = priorityLevel > 1;
+
+    // Calculate Queue Position
+    const pendingQuery = { 
+        status: 'pending',
+        priorityLevel: { $gte: priorityLevel }
+    };
+    if (departmentId) pendingQuery.departmentId = departmentId;
+    if (categoryId) pendingQuery.categoryId = categoryId;
+    
+    let queuePosition = await Chat.countDocuments(pendingQuery) + 1;
+    
+    const estimatedWaitTime = queuePosition * 2 * 60; // seconds
 
     // Create chat
     const chat = await Chat.create({
       visitorId,
       departmentId,
+      categoryId,
       status: 'pending',
+      queuePosition,
+      estimatedWaitTime,
+      priorityLevel,
+      isPremium,
     });
 
     // Update visitor chat count
@@ -89,12 +114,20 @@ exports.createChat = async (req, res) => {
     await visitor.save();
 
     const populatedChat = await Chat.findById(chat._id)
-      .populate('visitorId', 'name email sessionId')
+      .populate({
+          path: 'visitorId',
+          select: 'name email sessionId subscriptionId',
+          populate: { path: 'subscriptionId' }
+      })
       .populate('departmentId', 'name');
 
     res.status(201).json({
       success: true,
       chat: populatedChat,
+      queuePosition,
+      estimatedWaitTime,
+      priorityLevel,
+      isPremium,
     });
   } catch (error) {
     console.error('Create chat error:', error);
@@ -108,8 +141,11 @@ exports.createChat = async (req, res) => {
 exports.getChatById = async (req, res) => {
   try {
     const chat = await Chat.findById(req.params.id)
-      .populate('visitorId')
-      .populate('agentId', 'name displayName avatar')
+      .populate({
+        path: 'visitorId',
+        populate: { path: 'subscriptionId' }
+      })
+      .populate('agentId', 'name displayName avatar rating tagline') 
       .populate('departmentId', 'name');
 
     if (!chat) {
@@ -140,11 +176,40 @@ exports.updateChat = async (req, res) => {
 
     // Update fields
     if (agentId !== undefined) {
+      if (agentId && agentId !== String(chat.agentId)) {
+        const targetAgent = await Agent.findById(agentId);
+        if (!targetAgent) return res.status(404).json({ error: 'Agent not found' });
+
+        // 1. Capacity Check
+        if (targetAgent.currentChats >= targetAgent.chatLimit) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Agent ${targetAgent.name} has reached their concurrent chat limit (${targetAgent.chatLimit}).` 
+            });
+        }
+
+        // 2. Skill Check
+        if (chat.categoryId) {
+            const category = await IssueCategory.findById(chat.categoryId);
+            if (category && category.requiredSkills && category.requiredSkills.length > 0) {
+                const hasAllSkills = category.requiredSkills.every(skill => 
+                    targetAgent.skills && targetAgent.skills.includes(skill)
+                );
+                if (!hasAllSkills) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        message: `Agent ${targetAgent.name} lacks the required skills (${category.requiredSkills.join(', ')}) for this chat category.` 
+                    });
+                }
+            }
+        }
+      }
+
       // Update agent chat counts
-      if (chat.agentId) {
+      if (chat.agentId && String(chat.agentId) !== agentId) {
         await Agent.findByIdAndUpdate(chat.agentId, { $inc: { currentChats: -1 } });
       }
-      if (agentId) {
+      if (agentId && String(chat.agentId) !== agentId) {
         await Agent.findByIdAndUpdate(agentId, { $inc: { currentChats: 1, totalChats: 1 } });
       }
       chat.agentId = agentId;
@@ -167,7 +232,7 @@ exports.updateChat = async (req, res) => {
 
     const updatedChat = await Chat.findById(chat._id)
       .populate('visitorId')
-      .populate('agentId', 'name displayName avatar')
+      .populate('agentId', 'name displayName avatar rating tagline') // Added rating and tagline
       .populate('departmentId', 'name');
 
     res.json({

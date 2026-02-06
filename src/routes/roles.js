@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const roleController = require('../controllers/roleController');
-const { protect } = require('../middleware/auth');
+const { protect, authorize } = require('../middleware/auth');
 
-router.use(protect);
+router.use(protect, authorize('admin'));
 
 router.get('/', roleController.getRoles);
 router.post('/', roleController.createRole);

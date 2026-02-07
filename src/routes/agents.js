@@ -11,6 +11,9 @@ router.get('/metadata', agentController.getMetadata);
 router.post('/', agentController.createAgent);
 router.get('/:id', agentController.getAgentById);
 router.put('/:id', agentController.updateAgent);
+router.put('/:id/status', agentController.updateStatus);
+router.post('/:id/break', agentController.handleBreak);
 router.delete('/:id', agentController.deleteAgent);
+
 
 module.exports = router;

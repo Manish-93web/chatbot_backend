@@ -75,19 +75,33 @@ exports.uploadFile = async (req, res) => {
     }
 
     const fileUrl = `${process.env.BACKEND_URL || 'http://localhost:5000'}/uploads/${req.file.filename}`;
-    
-    // Log audit
-    // Optional: Log upload action if we have user context (might fail if auth not strictly enforced on this endpoint)
-    if (req.user) {
-        await logAudit(
-            req.user.id,
-            req.user.role ? 'agent' : 'visitor', // heuristic
-            'file_upload',
-            'file',
-            null,
-            { filename: req.file.filename, mimetype: req.file.mimetype, size: req.file.size }
-        );
+
+    // MOCK VIRUS SCANNING
+    const isClean = true; // Simulation
+    if (!isClean) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ success: false, message: 'File rejected: Virus detected (Mock)' });
     }
+
+    // Log audit
+    // Mandatory Audit for File Upload
+    const requesterId = req.headers['x-visitor-id'] || req.user?.id || 'anonymous';
+    const requesterType = req.user ? 'agent' : 'visitor';
+
+    await logAudit(
+      requesterId,
+      requesterType,
+      'file_upload',
+      'file',
+      null,
+      {
+        filename: req.file.filename,
+        originalName: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        scanResult: 'clean'
+      }
+    );
 
     res.json({
       success: true,

@@ -6,7 +6,7 @@ const Visitor = require('../models/Visitor');
 exports.getVisitors = async (req, res) => {
   try {
     const { online } = req.query;
-    
+
     const filter = {};
     if (online !== undefined) filter.online = online === 'true';
 
@@ -38,7 +38,7 @@ exports.getVisitors = async (req, res) => {
 // @access  Public
 exports.trackVisitor = async (req, res) => {
   try {
-    const { sessionId, name, email, ipAddress, userAgent, referrer, currentPage } = req.body;
+    const { sessionId, name, email, ipAddress, userAgent, referrer, currentPage, userId, fingerprint } = req.body;
 
     // Extract some info from user agent if possible (simple fallback)
     let browser = 'Chrome';
@@ -74,6 +74,8 @@ exports.trackVisitor = async (req, res) => {
           ...(req.body.phone && { phone: req.body.phone }),
           ...(userAgent && { userAgent }),
           ...(referrer && { referrer }),
+          ...(userId && { userId }),
+          ...(fingerprint && { fingerprint }),
         },
         $setOnInsert: {
           landingPage: currentPage || '/',
@@ -178,40 +180,40 @@ exports.validateWarranty = async (req, res) => {
     let expiryDate = null;
 
     if (serialNumber.startsWith('WARRANTY-PLATINUM')) {
-        subscriptionName = 'Platinum';
-        status = 'valid';
-        expiryDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+      subscriptionName = 'Platinum';
+      status = 'valid';
+      expiryDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
     } else if (serialNumber.startsWith('WARRANTY-GOLD')) {
-        subscriptionName = 'Gold';
-        status = 'valid';
-        expiryDate = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+      subscriptionName = 'Gold';
+      status = 'valid';
+      expiryDate = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
     } else if (serialNumber.startsWith('WARRANTY-SILVER')) {
-        subscriptionName = 'Silver';
-        status = 'valid';
-        expiryDate = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+      subscriptionName = 'Silver';
+      status = 'valid';
+      expiryDate = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
     } else if (serialNumber === 'EXPIRED') {
-        status = 'expired';
-        expiryDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+      status = 'expired';
+      expiryDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
     }
 
     const Subscription = require('../models/Subscription');
     const subscription = await Subscription.findOne({ name: subscriptionName });
 
     visitor.warranty = {
-        serialNumber,
-        expiryDate,
-        status
+      serialNumber,
+      expiryDate,
+      status
     };
     if (subscription) {
-        visitor.subscriptionId = subscription._id;
+      visitor.subscriptionId = subscription._id;
     }
 
     await visitor.save();
 
     res.json({
-        success: true,
-        message: status === 'valid' ? `Warranty validated! Upgraded to ${subscriptionName} support.` : 'Warranty validation failed or expired.',
-        visitor: await Visitor.findById(visitor._id).populate('subscriptionId')
+      success: true,
+      message: status === 'valid' ? `Warranty validated! Upgraded to ${subscriptionName} support.` : 'Warranty validation failed or expired.',
+      visitor: await Visitor.findById(visitor._id).populate('subscriptionId')
     });
 
   } catch (error) {
@@ -224,30 +226,187 @@ exports.validateWarranty = async (req, res) => {
 // @route   POST /api/visitors/:id/upgrade
 // @access  Public
 exports.upgradeSubscription = async (req, res) => {
-    try {
-        const { tierName } = req.body;
-        const Subscription = require('../models/Subscription');
-        const subscription = await Subscription.findOne({ name: tierName });
-        
-        if (!subscription) {
-            return res.status(404).json({ error: 'Subscription tier not found' });
-        }
+  try {
+    const { tierName } = req.body;
+    const Subscription = require('../models/Subscription');
+    const subscription = await Subscription.findOne({ name: tierName });
 
-        const visitor = await Visitor.findByIdAndUpdate(
-            req.params.id,
-            { subscriptionId: subscription._id },
-            { new: true }
-        ).populate('subscriptionId');
-
-        res.json({
-            success: true,
-            message: `Successfully upgraded to ${tierName} plan!`,
-            visitor
-        });
-    } catch (error) {
-        console.error('Upgrade subscription error:', error);
-        res.status(500).json({ error: 'Server error' });
+    if (!subscription) {
+      return res.status(404).json({ error: 'Subscription tier not found' });
     }
+
+    const visitor = await Visitor.findByIdAndUpdate(
+      req.params.id,
+      { subscriptionId: subscription._id },
+      { new: true }
+    ).populate('subscriptionId');
+
+    res.json({
+      success: true,
+      message: `Successfully upgraded to ${tierName} plan!`,
+      visitor
+    });
+  } catch (error) {
+    console.error('Upgrade subscription error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 };
+
+// @desc    Send verification code (OTP)
+// @route   POST /api/visitors/:id/verify-send
+// @access  Public
+exports.sendVerificationCode = async (req, res) => {
+  try {
+    const { email, phone } = req.body;
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ error: 'Visitor not found' });
+
+    // Generate 6-digit OTP
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+
+    visitor.verificationCode = code;
+    visitor.verificationExpires = expires;
+    if (email) visitor.email = email;
+    if (phone) visitor.phone = phone;
+    await visitor.save();
+
+    // MOCK SENDING (Log to console)
+    console.log(`[VERIFICATION] Sent code ${code} to ${email || phone}`);
+
+    res.json({
+      success: true,
+      message: `Verification code sent to ${email || phone}. (MOCK: ${code})`
+    });
+  } catch (error) {
+    console.error('Send verification error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// @desc    Verify code (OTP)
+// @route   POST /api/visitors/:id/verify-confirm
+// @access  Public
+exports.verifyCode = async (req, res) => {
+  try {
+    const { code } = req.body;
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ error: 'Visitor not found' });
+
+    if (!visitor.verificationCode || visitor.verificationCode !== code) {
+      return res.status(400).json({ success: false, error: 'Invalid verification code' });
+    }
+
+    if (new Date() > visitor.verificationExpires) {
+      return res.status(400).json({ success: false, error: 'Verification code expired' });
+    }
+
+    visitor.verified = true;
+    visitor.verificationCode = undefined;
+    visitor.verificationExpires = undefined;
+    await visitor.save();
+
+    res.json({
+      success: true,
+      message: 'Visitor verified successfully',
+      visitor
+    });
+  } catch (error) {
+    console.error('Confirm verification error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// @desc    Export all visitor data (GDPR)
+// @route   GET /api/visitors/:id/export
+// @access  Private
+exports.exportVisitorData = async (req, res) => {
+  try {
+    const Visitor = require('../models/Visitor'); // Ensure Visitor model is available
+    const Chat = require('../models/Chat');
+    const Message = require('../models/Message');
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ error: 'Visitor not found' });
+
+    const chats = await Chat.find({ visitorId: visitor._id });
+    const chatIds = chats.map(c => c._id);
+    const messages = await Message.find({ chatId: { $in: chatIds } });
+
+    const Ticket = require('../models/Ticket');
+    const tickets = await Ticket.find({ visitorId: visitor._id });
+
+    const exportData = {
+      visitor,
+      chats,
+      messages,
+      tickets
+    };
+
+    res.json({
+      success: true,
+      data: exportData
+    });
+
+    await logAudit(req.user?.id, 'agent', 'data_export', 'visitor', visitor._id, { type: 'gdpr_export' });
+
+  } catch (error) {
+    console.error('Export data error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// @desc    Delete visitor data (GDPR)
+// @route   DELETE /api/visitors/:id/purge
+// @access  Private (Admin)
+exports.deleteVisitorData = async (req, res) => {
+  try {
+    const Visitor = require('../models/Visitor'); // Ensure Visitor model is available
+    const Chat = require('../models/Chat');
+    const Message = require('../models/Message');
+    const visitor = await Visitor.findById(req.params.id);
+    if (!visitor) return res.status(404).json({ error: 'Visitor not found' });
+
+    // Note: For real production, you might want to anonymize instead of delete 
+    // to maintain business metrics. Here we delete as requested.
+
+    const chats = await Chat.find({ visitorId: visitor._id });
+    const chatIds = chats.map(c => c._id);
+
+    await Message.deleteMany({ chatId: { $in: chatIds } });
+    await Chat.deleteMany({ visitorId: visitor._id });
+
+    const Ticket = require('../models/Ticket');
+    await Ticket.deleteMany({ visitorId: visitor._id });
+
+    await Visitor.findByIdAndDelete(visitor._id);
+
+    res.json({
+      success: true,
+      message: 'All visitor data has been purged successfully.'
+    });
+
+    await logAudit(req.user?.id, 'agent', 'data_purge', 'visitor', visitor._id, { type: 'gdpr_delete' });
+
+  } catch (error) {
+    console.error('Purge data error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+async function logAudit(userId, userType, action, resource, resourceId, changes = {}) {
+  const AuditLog = require('../models/AuditLog');
+  try {
+    await AuditLog.create({
+      userId,
+      userType,
+      action,
+      resource,
+      resourceId,
+      changes,
+    });
+  } catch (error) {
+    console.error('Audit log error:', error);
+  }
+}
 
 module.exports = exports;

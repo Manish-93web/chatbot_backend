@@ -53,9 +53,21 @@ const agentSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['online', 'busy', 'away', 'offline'],
+    enum: ['online', 'busy', 'away', 'wrap-up', 'offline'],
     default: 'offline',
   },
+  shiftHours: {
+    start: String, // HH:mm
+    end: String,   // HH:mm
+    timezone: { type: String, default: 'UTC' }
+  },
+  breaks: [{
+    type: { type: String, enum: ['lunch', 'short'] },
+    start: Date,
+    end: Date,
+    isOver: { type: Boolean, default: false }
+  }],
+  lastStatusChange: Date,
   lastLogin: Date,
   preferences: {
     language: {
@@ -84,9 +96,9 @@ const agentSchema = new mongoose.Schema({
 });
 
 // Hash password before saving
-agentSchema.pre('save', async function(next) {
+agentSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
-  
+
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
@@ -97,12 +109,12 @@ agentSchema.pre('save', async function(next) {
 });
 
 // Method to compare password
-agentSchema.methods.comparePassword = async function(candidatePassword) {
+agentSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
 // Remove password from JSON output
-agentSchema.methods.toJSON = function() {
+agentSchema.methods.toJSON = function () {
   const obj = this.toObject();
   delete obj.password;
   return obj;

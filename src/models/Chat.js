@@ -20,8 +20,14 @@ const chatSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'active', 'completed', 'missed'],
+    enum: ['pending', 'active', 'completed', 'missed', 'overflow'],
     default: 'pending',
+  },
+  callbackRequest: {
+    requested: { type: Boolean, default: false },
+    phone: String,
+    preferredTime: Date,
+    processed: { type: Boolean, default: false }
   },
   channel: {
     type: String,
@@ -89,13 +95,17 @@ const chatSchema = new mongoose.Schema({
   isPremium: {
     type: Boolean,
     default: false,
+  },
+  lastMessageAt: {
+    type: Date,
+    default: Date.now,
   }
 }, {
   timestamps: true,
 });
 
 // Calculate duration when chat ends
-chatSchema.pre('save', function(next) {
+chatSchema.pre('save', function (next) {
   if (this.endTime && this.startTime) {
     this.duration = Math.floor((this.endTime - this.startTime) / 1000);
     this.resolutionTime = this.duration;

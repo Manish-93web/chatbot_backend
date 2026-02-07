@@ -6,6 +6,17 @@ const visitorSchema = new mongoose.Schema({
     required: true,
     unique: true,
   },
+  userId: {
+    type: String, // ID from the main store/app if logged in
+    index: true,
+  },
+  verified: {
+    type: Boolean,
+    default: false,
+  },
+  verificationCode: String,
+  verificationExpires: Date,
+  fingerprint: String, // Device fingerprint
   name: String,
   email: String,
   phone: String,
@@ -65,6 +76,10 @@ const visitorSchema = new mongoose.Schema({
       enum: ['valid', 'expired', 'none'],
       default: 'none',
     },
+  },
+  language: {
+    type: String,
+    default: 'en',
   },
   lastSeen: {
     type: Date,

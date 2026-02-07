@@ -6,7 +6,7 @@ const Agent = require('../models/Agent');
 exports.getAgents = async (req, res) => {
   try {
     const { departmentId, enabled } = req.query;
-    
+
     const filter = {};
     if (departmentId) filter.departmentId = departmentId;
     if (enabled !== undefined) filter.enabled = enabled === 'true';
@@ -76,7 +76,6 @@ exports.getAgentById = async (req, res) => {
 // @access  Private
 exports.updateAgent = async (req, res) => {
   try {
-    // If password is being updated, update plainPassword too
     if (req.body.password) {
       req.body.plainPassword = req.body.password;
     }
@@ -97,6 +96,70 @@ exports.updateAgent = async (req, res) => {
     });
   } catch (error) {
     console.error('Update agent error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// @desc    Update agent status
+// @route   PUT /api/agents/:id/status
+// @access  Private
+exports.updateStatus = async (req, res) => {
+  try {
+    const { status } = req.body;
+    const validStatuses = ['online', 'busy', 'away', 'wrap-up', 'offline'];
+
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const agent = await Agent.findByIdAndUpdate(
+      req.params.id,
+      { status, lastStatusChange: new Date(), lastSeen: new Date() },
+      { new: true }
+    ).select('-password');
+
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    // Broadcast status change
+    const io = require('../websocket/socketServer').getIO();
+    if (io) {
+      io.emit('agent:status', { agentId: agent._id, status });
+    }
+
+    res.json({ success: true, agent });
+  } catch (error) {
+    console.error('Update status error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// @desc    Start / End break
+// @route   POST /api/agents/:id/break
+// @access  Private
+exports.handleBreak = async (req, res) => {
+  try {
+    const { type, action } = req.body; // type: lunch/short, action: start/end
+    const agent = await Agent.findById(req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    if (action === 'start') {
+      agent.breaks.push({ type, start: new Date(), isOver: false });
+      agent.status = 'away';
+    } else {
+      const activeBreak = agent.breaks.find(b => !b.isOver);
+      if (activeBreak) {
+        activeBreak.end = new Date();
+        activeBreak.isOver = true;
+      }
+      agent.status = 'online';
+    }
+
+    agent.lastStatusChange = new Date();
+    await agent.save();
+
+    res.json({ success: true, agent });
+  } catch (error) {
+    console.error('Handle break error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };

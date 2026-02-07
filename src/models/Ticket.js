@@ -10,6 +10,10 @@ const ticketSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Chat',
   },
+  relatedChats: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Chat',
+  }],
   visitorId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Visitor',
@@ -134,7 +138,7 @@ const ticketSchema = new mongoose.Schema({
 });
 
 // Auto-generate ticket number
-ticketSchema.pre('save', async function(next) {
+ticketSchema.pre('save', async function (next) {
   if (this.isNew && !this.ticketNumber) {
     const year = new Date().getFullYear();
     const count = await mongoose.model('Ticket').countDocuments();
@@ -144,7 +148,7 @@ ticketSchema.pre('save', async function(next) {
 });
 
 // Calculate resolution time when ticket is resolved
-ticketSchema.pre('save', function(next) {
+ticketSchema.pre('save', function (next) {
   if (this.isModified('status') && this.status === 'resolved' && !this.resolution.resolvedAt) {
     this.resolution.resolvedAt = new Date();
     this.resolution.resolutionTime = Math.floor((this.resolution.resolvedAt - this.createdAt) / 60000);

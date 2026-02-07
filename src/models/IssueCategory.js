@@ -22,7 +22,13 @@ const issueCategorySchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
-  requiredSkills: [String]
+  requiredSkills: [String],
+  compatibilityRules: {
+    minOsVersion: String,
+    unsupportedDevices: [String],
+    isEOL: { type: Boolean, default: false },
+    recallAlert: String,
+  }
 }, {
   timestamps: true,
 });

@@ -81,6 +81,10 @@ app.use((err, req, res, next) => {
 // Initialize Socket.IO
 initializeSocketServer(server);
 
+// Start Auto Rules Service (Lifecycle management)
+const { startAutoRulesService } = require('./services/autoRulesService');
+startAutoRulesService();
+
 // Start server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {

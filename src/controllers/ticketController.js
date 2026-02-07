@@ -404,7 +404,7 @@ exports.closeTicket = async (req, res) => {
 
     ticket.status = 'closed';
     ticket.closedAt = new Date();
-    
+
     if (resolution) {
       ticket.resolution.summary = resolution;
       ticket.resolution.resolvedBy = req.user?.id;
@@ -510,13 +510,25 @@ exports.convertChatToTicket = async (req, res) => {
     }
 
     // Check if ticket already exists for this chat
-    const existingTicket = await Ticket.findOne({ chatId });
-    if (existingTicket) {
-      return res.status(400).json({
-        success: false,
-        message: 'Ticket already exists for this chat',
-        ticket: existingTicket,
+    let ticket = await Ticket.findOne({ $or: [{ chatId }, { relatedChats: chatId }] });
+
+    if (ticket) {
+      return res.status(200).json({
+        success: true,
+        message: 'Chat is already linked to a ticket',
+        ticket,
       });
+    }
+
+    // Optional: Link to an existing ticket if ticketId provided
+    const { targetTicketId } = req.body;
+    if (targetTicketId) {
+      ticket = await Ticket.findById(targetTicketId);
+      if (ticket) {
+        ticket.relatedChats.push(chatId);
+        await ticket.save();
+        return res.json({ success: true, message: 'Chat linked to existing ticket', ticket });
+      }
     }
 
     // Calculate SLA

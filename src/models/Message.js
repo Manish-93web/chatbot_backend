@@ -48,6 +48,11 @@ const messageSchema = new mongoose.Schema({
     provider: String,
   },
   detectedLanguage: String,
+  isEdited: {
+    type: Boolean,
+    default: false,
+  },
+  editedAt: Date,
 }, {
   timestamps: true,
 });

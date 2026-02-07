@@ -31,7 +31,7 @@ const initializeSocketServer = (server) => {
       socket.data.userId = data.agentId;
       socket.data.userType = 'agent';
       socket.join(`agent:${data.agentId}`);
-      
+
       io.emit('agent:status', {
         agentId: data.agentId,
         status: 'online',
@@ -43,16 +43,32 @@ const initializeSocketServer = (server) => {
       console.log('Visitor connected:', data.visitorId);
       socket.data.userId = data.visitorId;
       socket.data.userType = 'visitor';
-      
+      socket.data.sessionId = data.sessionId;
+
       // Update visitor online status
-      await Visitor.findByIdAndUpdate(data.visitorId, { online: true });
-      
+      await Visitor.findByIdAndUpdate(data.visitorId, {
+        online: true,
+        lastSeen: new Date(),
+        ...(data.fingerprint && { fingerprint: data.fingerprint })
+      });
+
       socket.join(`visitor:${data.visitorId}`);
-      
+
+      // Handle multi-tab: broadcast to other tabs of the same visitor if needed
+      // Actually Socket.io rooms handle this well if they all join the same room.
+
       io.emit('visitor:online', {
         visitorId: data.visitorId,
         sessionId: data.sessionId,
       });
+
+      // Auto-join active chat if exists
+      const activeChat = await Chat.findOne({ visitorId: data.visitorId, status: { $in: ['pending', 'active'] } });
+      if (activeChat) {
+        socket.join(`chat:${activeChat._id}`);
+        socket.data.chatId = activeChat._id;
+        socket.emit('chat:active', activeChat);
+      }
     });
 
     // Join chat room
@@ -60,10 +76,10 @@ const initializeSocketServer = (server) => {
       console.log('Joining chat:', data.chatId);
       socket.data.chatId = data.chatId;
       socket.join(`chat:${data.chatId}`);
-      
+
       // If user is an agent, also join the internal room for this chat
       if (socket.data.userType === 'agent') {
-          socket.join(`chat:${data.chatId}:internal`);
+        socket.join(`chat:${data.chatId}:internal`);
       }
     });
 
@@ -72,7 +88,7 @@ const initializeSocketServer = (server) => {
       console.log('Leaving chat:', data.chatId);
       socket.leave(`chat:${data.chatId}`);
       if (socket.data.userType === 'agent') {
-          socket.leave(`chat:${data.chatId}:internal`);
+        socket.leave(`chat:${data.chatId}:internal`);
       }
       socket.data.chatId = undefined;
     });
@@ -88,9 +104,9 @@ const initializeSocketServer = (server) => {
           const Agent = require('../models/Agent');
           await Agent.findByIdAndUpdate(data.senderId, { lastSeen: new Date() });
         }
-        
+
         if (data.isInternal && data.senderType !== 'agent') {
-             data.isInternal = false;
+          data.isInternal = false;
         }
 
         const message = await Message.create({
@@ -102,10 +118,13 @@ const initializeSocketServer = (server) => {
           isInternal: data.isInternal || false,
         });
 
+        // Update chat activity
+        await Chat.findByIdAndUpdate(data.chatId, { lastMessageAt: new Date() });
+
         if (message.isInternal) {
-            io.to(`chat:${data.chatId}:internal`).emit('message:new', message);
+          io.to(`chat:${data.chatId}:internal`).emit('message:new', message);
         } else {
-            io.to(`chat:${data.chatId}`).emit('message:new', message);
+          io.to(`chat:${data.chatId}`).emit('message:new', message);
         }
 
         io.emit('agent:notification', {
@@ -116,10 +135,10 @@ const initializeSocketServer = (server) => {
 
         const chat = await Chat.findById(data.chatId);
         if (chat && chat.agentId) {
-            io.to(`agent:${chat.agentId}`).emit('message:notification', {
-              chatId: data.chatId,
-              message,
-            });
+          io.to(`agent:${chat.agentId}`).emit('message:notification', {
+            chatId: data.chatId,
+            message,
+          });
         }
 
         // Send acknowledgment back to sender
@@ -134,78 +153,78 @@ const initializeSocketServer = (server) => {
 
     // Heartbeat
     socket.on('heartbeat', async () => {
-        const { userId, userType } = socket.data;
-        if (userId) {
-            if (userType === 'visitor') {
-                await Visitor.findByIdAndUpdate(userId, { lastSeen: new Date(), online: true });
-            } else if (userType === 'agent') {
-                const Agent = require('../models/Agent');
-                await Agent.findByIdAndUpdate(userId, { lastSeen: new Date() });
-            }
+      const { userId, userType } = socket.data;
+      if (userId) {
+        if (userType === 'visitor') {
+          await Visitor.findByIdAndUpdate(userId, { lastSeen: new Date(), online: true });
+        } else if (userType === 'agent') {
+          const Agent = require('../models/Agent');
+          await Agent.findByIdAndUpdate(userId, { lastSeen: new Date() });
         }
+      }
     });
 
     // Supervisor Takeover
     socket.on('agent:takeover', async (data) => {
-        const { chatId, supervisorId } = data;
-        try {
-            const chat = await Chat.findById(chatId);
-            if (!chat) return;
+      const { chatId, supervisorId } = data;
+      try {
+        const chat = await Chat.findById(chatId);
+        if (!chat) return;
 
-            const oldAgentId = chat.agentId;
-            chat.agentId = supervisorId;
-            chat.status = 'active';
-            await chat.save();
+        const oldAgentId = chat.agentId;
+        chat.agentId = supervisorId;
+        chat.status = 'active';
+        await chat.save();
 
-            const Agent = require('../models/Agent');
-            if (oldAgentId) {
-                await Agent.findByIdAndUpdate(oldAgentId, { $inc: { currentChats: -1 } });
-            }
-            await Agent.findByIdAndUpdate(supervisorId, { $inc: { currentChats: 1, totalChats: 1 } });
-
-            const populatedChat = await Chat.findById(chatId)
-                .populate('agentId', 'name displayName avatar')
-                .populate('visitorId', 'name email');
-
-            io.to(`chat:${chatId}`).emit('chat:updated', populatedChat);
-            io.to(`chat:${chatId}`).emit('chat:assigned', populatedChat);
-            
-            // Notify old agent
-            if (oldAgentId) {
-                io.to(`agent:${oldAgentId}`).emit('chat:taken_over', { chatId, supervisorId });
-            }
-
-            // System message for takeover
-            const sysMsg = await Message.create({
-                chatId,
-                senderId: 'system',
-                senderType: 'system',
-                content: 'A supervisor has taken over this conversation.',
-                isInternal: false
-            });
-            io.to(`chat:${chatId}`).emit('message:new', sysMsg);
-
-        } catch (error) {
-            console.error('Takeover error:', error);
+        const Agent = require('../models/Agent');
+        if (oldAgentId) {
+          await Agent.findByIdAndUpdate(oldAgentId, { $inc: { currentChats: -1 } });
         }
+        await Agent.findByIdAndUpdate(supervisorId, { $inc: { currentChats: 1, totalChats: 1 } });
+
+        const populatedChat = await Chat.findById(chatId)
+          .populate('agentId', 'name displayName avatar')
+          .populate('visitorId', 'name email');
+
+        io.to(`chat:${chatId}`).emit('chat:updated', populatedChat);
+        io.to(`chat:${chatId}`).emit('chat:assigned', populatedChat);
+
+        // Notify old agent
+        if (oldAgentId) {
+          io.to(`agent:${oldAgentId}`).emit('chat:taken_over', { chatId, supervisorId });
+        }
+
+        // System message for takeover
+        const sysMsg = await Message.create({
+          chatId,
+          senderId: 'system',
+          senderType: 'system',
+          content: 'A supervisor has taken over this conversation.',
+          isInternal: false
+        });
+        io.to(`chat:${chatId}`).emit('message:new', sysMsg);
+
+      } catch (error) {
+        console.error('Takeover error:', error);
+      }
     });
 
     // Agent Direct Message (Internal Chat)
     socket.on('agent:direct_message', async (data) => {
-        const { senderId, receiverId, content } = data;
-        // This is a simplified version - in a production app, you'd store this in a DirectMessage model
-        io.to(`agent:${receiverId}`).emit('agent:direct_message', {
-            senderId,
-            content,
-            sentAt: new Date()
-        });
-        socket.emit('agent:direct_message', {
-            senderId,
-            receiverId,
-            content,
-            sentAt: new Date(),
-            delivered: true
-        });
+      const { senderId, receiverId, content } = data;
+      // This is a simplified version - in a production app, you'd store this in a DirectMessage model
+      io.to(`agent:${receiverId}`).emit('agent:direct_message', {
+        senderId,
+        content,
+        sentAt: new Date()
+      });
+      socket.emit('agent:direct_message', {
+        senderId,
+        receiverId,
+        content,
+        sentAt: new Date(),
+        delivered: true
+      });
     });
 
     // Disconnect with Grace Period
@@ -217,24 +236,24 @@ const initializeSocketServer = (server) => {
 
       // Wait 5 seconds to see if they reconnect before marking offline
       setTimeout(async () => {
-          // Check if user has any other active connections
-          const remainingSockets = await io.fetchSockets();
-          const isStillConnected = remainingSockets.some(s => s.data.userId === userId);
+        // Check if user has any other active connections
+        const remainingSockets = await io.fetchSockets();
+        const isStillConnected = remainingSockets.some(s => s.data.userId === userId);
 
-          if (!isStillConnected) {
-              if (userType === 'visitor') {
-                await Visitor.findByIdAndUpdate(userId, { online: false });
-                io.emit('visitor:offline', { visitorId: userId });
-              } else if (userType === 'agent') {
-                 const Agent = require('../models/Agent');
-                 await Agent.findByIdAndUpdate(userId, { status: 'offline' });
-                
-                io.emit('agent:status', {
-                  agentId: userId,
-                  status: 'offline',
-                });
-              }
+        if (!isStillConnected) {
+          if (userType === 'visitor') {
+            await Visitor.findByIdAndUpdate(userId, { online: false });
+            io.emit('visitor:offline', { visitorId: userId });
+          } else if (userType === 'agent') {
+            const Agent = require('../models/Agent');
+            await Agent.findByIdAndUpdate(userId, { status: 'offline' });
+
+            io.emit('agent:status', {
+              agentId: userId,
+              status: 'offline',
+            });
           }
+        }
       }, 5000);
     });
   });

@@ -7,10 +7,12 @@ const feedbackController = require('../controllers/feedbackController');
 
 // Public routes
 router.post('/', chatController.createChat);
-router.get('/', chatController.getChats); // Public but controller handles auth logic
-router.get('/:id', chatController.getChatById); // Made public
+router.get('/', chatController.getChats);
+router.get('/overflow', authMiddleware, chatController.getOverflowChats);
+router.get('/:id', chatController.getChatById);
 router.put('/:id', authMiddleware, chatController.updateChat);
 router.delete('/:id', authMiddleware, chatController.deleteChat);
+router.post('/:id/callback', chatController.requestCallback);
 
 // Feedback routes
 router.post('/:id/feedback', feedbackController.submitFeedback);

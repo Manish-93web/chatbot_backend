@@ -534,7 +534,7 @@ exports.convertChatToTicket = async (req, res) => {
     // Calculate SLA
     const sla = await calculateSLA(priority || 'medium');
 
-    const ticket = await Ticket.create({
+    ticket = await Ticket.create({
       chatId,
       visitorId: chat.visitorId._id,
       assignedTo: chat.agentId,

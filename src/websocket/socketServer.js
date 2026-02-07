@@ -2,6 +2,7 @@ const socketIO = require('socket.io');
 const Message = require('../models/Message');
 const Chat = require('../models/Chat');
 const Visitor = require('../models/Visitor');
+const mongoose = require('mongoose');
 
 let io = null;
 
@@ -93,16 +94,79 @@ const initializeSocketServer = (server) => {
       socket.data.chatId = undefined;
     });
 
+    // Assign chat to agent
+    socket.on('chat:assign', async (data) => {
+      const { chatId, agentId } = data;
+      try {
+        const chat = await Chat.findById(chatId);
+        if (!chat) return;
+
+        chat.agentId = agentId;
+        chat.status = 'active';
+        chat.startTime = chat.startTime || new Date();
+        await chat.save();
+
+        const Agent = require('../models/Agent');
+        await Agent.findByIdAndUpdate(agentId, { $inc: { currentChats: 1, totalChats: 1 } });
+
+        const populatedChat = await Chat.findById(chatId)
+          .populate('agentId', 'name displayName avatar')
+          .populate('visitorId', 'name email');
+
+        io.to(`chat:${chatId}`).emit('chat:updated', populatedChat);
+        io.to(`chat:${chatId}`).emit('chat:assigned', populatedChat);
+
+        // Ensure assigning agent joins rooms
+        socket.join(`chat:${chatId}`);
+        socket.join(`chat:${chatId}:internal`);
+
+      } catch (error) {
+        console.error('Assign error:', error);
+      }
+    });
+
+    // Complete chat
+    socket.on('chat:complete', async (data) => {
+      const { chatId } = data;
+      try {
+        const chat = await Chat.findById(chatId);
+        if (!chat || chat.status === 'completed') return;
+
+        chat.status = 'completed';
+        chat.endTime = new Date();
+        await chat.save();
+
+        if (chat.agentId) {
+          const Agent = require('../models/Agent');
+          await Agent.findByIdAndUpdate(chat.agentId, { $inc: { currentChats: -1 } });
+        }
+
+        const sysMsg = await Message.create({
+          chatId,
+          senderId: 'system',
+          senderType: 'system',
+          content: 'This conversation has ended.',
+          isInternal: false
+        });
+
+        io.to(`chat:${chatId}`).emit('message:new', sysMsg);
+        io.to(`chat:${chatId}`).emit('chat:completed', chat);
+      } catch (error) {
+        console.error('Complete error:', error);
+      }
+    });
+
     // Send message with ACK
     socket.on('message:send', async (data, callback) => {
       console.log('New message:', data);
 
       try {
+        // Non-blocking user activity updates
         if (data.senderType === 'visitor') {
-          await Visitor.findByIdAndUpdate(data.senderId, { online: true, lastSeen: new Date() });
-        } else {
+          Visitor.findByIdAndUpdate(data.senderId, { online: true, lastSeen: new Date() }).catch(err => console.error('Visitor update error:', err));
+        } else if (mongoose.Types.ObjectId.isValid(data.senderId)) {
           const Agent = require('../models/Agent');
-          await Agent.findByIdAndUpdate(data.senderId, { lastSeen: new Date() });
+          Agent.findByIdAndUpdate(data.senderId, { lastSeen: new Date() }).catch(err => console.error('Agent update error:', err));
         }
 
         if (data.isInternal && data.senderType !== 'agent') {
@@ -116,38 +180,138 @@ const initializeSocketServer = (server) => {
           content: data.content,
           type: data.type || 'text',
           isInternal: data.isInternal || false,
+          clientId: data.clientId // Save clientId for frontend duplicate detection
         });
 
-        // Update chat activity
-        await Chat.findByIdAndUpdate(data.chatId, { lastMessageAt: new Date() });
-
+        // Emit message immediately after creation
         if (message.isInternal) {
           io.to(`chat:${data.chatId}:internal`).emit('message:new', message);
         } else {
           io.to(`chat:${data.chatId}`).emit('message:new', message);
         }
 
-        io.emit('agent:notification', {
-          type: 'message',
-          chatId: data.chatId,
-          message,
+        // Return acknowledgment to sender immediately
+        if (callback) callback({ success: true, message });
+
+        // Secondary non-blocking updates and notifications
+        Chat.findByIdAndUpdate(data.chatId, { lastMessageAt: new Date() }).catch(err => console.error('Chat update error:', err));
+
+        // Background notification logic
+        setImmediate(async () => {
+          try {
+            io.emit('agent:notification', {
+              type: 'message',
+              chatId: data.chatId,
+              message,
+            });
+
+            const chat = await Chat.findById(data.chatId).select('agentId');
+            if (chat && chat.agentId) {
+              io.to(`agent:${chat.agentId}`).emit('message:notification', {
+                chatId: data.chatId,
+                message,
+              });
+            }
+          } catch (err) {
+            console.error('Notification logic error:', err);
+          }
         });
-
-        const chat = await Chat.findById(data.chatId);
-        if (chat && chat.agentId) {
-          io.to(`agent:${chat.agentId}`).emit('message:notification', {
-            chatId: data.chatId,
-            message,
-          });
-        }
-
-        // Send acknowledgment back to sender
-        if (callback) callback({ success: true, messageId: message._id });
 
       } catch (error) {
         console.error('Error sending message:', error);
         if (callback) callback({ success: false, error: 'Failed to send message' });
         socket.emit('message:error', { error: 'Failed to send message' });
+      }
+    });
+
+
+
+    // Typing Indicators
+    socket.on('typing:start', (data) => {
+      const { chatId, userId, userType } = data;
+      socket.to(`chat:${chatId}`).emit('typing:indicator', {
+        chatId,
+        userId,
+        userType,
+        isTyping: true
+      });
+    });
+
+    socket.on('typing:stop', (data) => {
+      const { chatId, userId, userType } = data;
+      socket.to(`chat:${chatId}`).emit('typing:indicator', {
+        chatId,
+        userId,
+        userType,
+        isTyping: false
+      });
+    });
+
+    // Message Delivered
+    socket.on('message:delivered', async (data) => {
+      const { chatId, messageId, deliveredTo, userType } = data;
+      try {
+        // Update specific message or all SENT messages in chat if messageId is not provided
+        // We only update if status is 'SENT' (don't downgrade from SEEN)
+        if (messageId) {
+          await Message.updateOne(
+            { _id: messageId, status: 'SENT' },
+            { status: 'DELIVERED', deliveredAt: new Date() }
+          );
+        } else {
+          // Mark all SENT messages as DELIVERED for this chat where sender is NOT the one delivering it
+          await Message.updateMany(
+            { chatId, senderType: { $ne: userType }, status: 'SENT' },
+            { status: 'DELIVERED', deliveredAt: new Date() }
+          );
+        }
+
+        // Broadcast status update
+        io.to(`chat:${chatId}`).emit('message:status_update', {
+          chatId,
+          messageId, // might be null if bulk
+          status: 'DELIVERED',
+          userType,
+          deliveredAt: new Date()
+        });
+
+      } catch (error) {
+        console.error('Error marking message as delivered:', error);
+      }
+    });
+
+    // Message Seen
+    socket.on('message:seen', async (data) => {
+      const { chatId, messageId, seenBy, userType } = data;
+      try {
+        const updateData = { status: 'SEEN', seenAt: new Date(), read: true };
+
+        // Update specific message or all unseen messages
+        if (messageId) {
+          await Message.findByIdAndUpdate(messageId, updateData);
+        } else {
+          // Mark all messages as SEEN for this chat where sender is NOT the one seeing it
+          await Message.updateMany(
+            { chatId, senderType: { $ne: userType }, status: { $ne: 'SEEN' } },
+            updateData
+          );
+        }
+
+        // Broadcast to everyone in the chat
+        io.to(`chat:${chatId}`).emit('message:status_update', {
+          chatId,
+          messageId,
+          status: 'SEEN',
+          seenBy,
+          userType,
+          seenAt: new Date()
+        });
+
+        // Also emit legacy event if needed, but status_update should cover it
+        // io.to(`chat:${chatId}`).emit('message:seen', ...); 
+
+      } catch (error) {
+        console.error('Error marking message as seen:', error);
       }
     });
 
@@ -231,8 +395,17 @@ const initializeSocketServer = (server) => {
     socket.on('disconnect', async () => {
       console.log('Client disconnected:', socket.id);
       const { userId, userType } = socket.data;
-
       if (!userId) return;
+
+      // Stop typing if they were typing
+      if (socket.data.chatId) {
+        io.to(`chat:${socket.data.chatId}`).emit('typing:indicator', {
+          chatId: socket.data.chatId,
+          userId,
+          userType,
+          isTyping: false
+        });
+      }
 
       // Wait 5 seconds to see if they reconnect before marking offline
       setTimeout(async () => {

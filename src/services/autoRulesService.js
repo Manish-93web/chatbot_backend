@@ -25,7 +25,7 @@ const startAutoRulesService = () => {
             const idleChats = await Chat.find({
                 status: 'active',
                 lastMessageAt: { $lt: new Date(now - idleThreshold) },
-                metadata: { $not: { $exists: 'auto_warned' } }
+                'metadata.auto_warned': { $exists: false }
             });
 
             for (const chat of idleChats) {
@@ -97,7 +97,7 @@ const startAutoRulesService = () => {
             const breachChats = await Chat.find({
                 status: { $in: ['pending', 'overflow'] },
                 startTime: { $lt: new Date(now - slaThreshold) },
-                'metadata.sla_warned': { $ne: true }
+                'metadata.sla_warned': { $ne: 'true' }
             });
 
             for (const chat of breachChats) {

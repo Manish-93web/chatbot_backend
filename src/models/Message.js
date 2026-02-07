@@ -53,9 +53,13 @@ const messageSchema = new mongoose.Schema({
     default: false,
   },
   editedAt: Date,
+  clientId: { type: String }, // For tracking from client side/duplicate prevention
 }, {
-  timestamps: true,
+  timestamps: { createdAt: 'sentAt', updatedAt: 'updatedAt' },
 });
+
+// Index for clientId to prevent duplicates during retries
+messageSchema.index({ chatId: 1, clientId: 1 }, { unique: true, sparse: true });
 
 // Index for faster queries
 messageSchema.index({ chatId: 1, sentAt: 1 });

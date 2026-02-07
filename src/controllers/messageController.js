@@ -71,12 +71,24 @@ exports.getMessages = async (req, res) => {
 exports.sendMessage = async (req, res) => {
   try {
     const { chatId } = req.params;
-    const { senderId, senderType, content, type } = req.body;
+    const { senderId, senderType, content, type, clientId } = req.body;
 
     // Verify chat exists
     const chat = await Chat.findById(chatId);
     if (!chat) {
       return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    // Duplicate Check (by clientId)
+    if (clientId) {
+      const existingMessage = await Message.findOne({ chatId, clientId });
+      if (existingMessage) {
+        return res.status(200).json({
+          success: true,
+          message: existingMessage,
+          isDuplicate: true
+        });
+      }
     }
 
     // Create message
@@ -86,6 +98,7 @@ exports.sendMessage = async (req, res) => {
       senderType,
       content,
       type: type || 'text',
+      clientId
     });
 
     // Handle First Response Time (FRT)
@@ -153,12 +166,14 @@ exports.updateMessage = async (req, res) => {
     // Log audit
     const AuditLog = require('../models/AuditLog');
     await AuditLog.create({
-      userId: req.user?.id || 'anonymous',
+      userId: req.user?.id && req.user.id !== 'anonymous' ? req.user.id : undefined,
       userType: 'agent',
-      action: 'message_edit',
+      action: 'update',
       resource: 'message',
       resourceId: message._id,
-      changes: { from: oldContent, to: content }
+      changes: { before: { content: oldContent }, after: { content } },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
     });
 
     // Socket broadcast
@@ -188,12 +203,14 @@ exports.deleteMessage = async (req, res) => {
     // Log audit
     const AuditLog = require('../models/AuditLog');
     await AuditLog.create({
-      userId: req.user?.id || 'anonymous',
+      userId: req.user?.id && req.user.id !== 'anonymous' ? req.user.id : undefined,
       userType: 'agent',
-      action: 'message_delete',
+      action: 'delete',
       resource: 'message',
       resourceId: req.params.id,
-      changes: { content: message.content }
+      changes: { before: { content: message.content } },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
     });
 
     // Socket broadcast

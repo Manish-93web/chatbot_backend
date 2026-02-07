@@ -347,7 +347,7 @@ exports.exportVisitorData = async (req, res) => {
       data: exportData
     });
 
-    await logAudit(req.user?.id, 'agent', 'data_export', 'visitor', visitor._id, { type: 'gdpr_export' });
+    await logAudit(req.user?.id, 'agent', 'export', 'visitor', visitor._id, { after: { type: 'gdpr_export' } }, req);
 
   } catch (error) {
     console.error('Export data error:', error);
@@ -385,7 +385,7 @@ exports.deleteVisitorData = async (req, res) => {
       message: 'All visitor data has been purged successfully.'
     });
 
-    await logAudit(req.user?.id, 'agent', 'data_purge', 'visitor', visitor._id, { type: 'gdpr_delete' });
+    await logAudit(req.user?.id, 'agent', 'delete', 'visitor', visitor._id, { before: { visitorId: visitor._id } }, req);
 
   } catch (error) {
     console.error('Purge data error:', error);
@@ -393,16 +393,18 @@ exports.deleteVisitorData = async (req, res) => {
   }
 };
 
-async function logAudit(userId, userType, action, resource, resourceId, changes = {}) {
+async function logAudit(userId, userType, action, resource, resourceId, changes = {}, req = null) {
   const AuditLog = require('../models/AuditLog');
   try {
     await AuditLog.create({
-      userId,
+      userId: (userId && userId !== 'anonymous' && userId.length === 24) ? userId : undefined,
       userType,
       action,
       resource,
-      resourceId,
-      changes,
+      resourceId: (resourceId && resourceId.toString().length === 24) ? resourceId : undefined,
+      changes: changes.before || changes.after ? changes : { after: changes },
+      ipAddress: req ? req.ip : undefined,
+      userAgent: req ? req.headers['user-agent'] : undefined,
     });
   } catch (error) {
     console.error('Audit log error:', error);

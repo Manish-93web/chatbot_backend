@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const auditLogSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
-    required: true,
+    required: false, // Support anonymous/unlogged visitors
   },
   userType: {
     type: String,
@@ -20,7 +20,7 @@ const auditLogSchema = new mongoose.Schema({
       'status_change', 'priority_change',
       'export', 'import',
       'settings_change', 'permission_change',
-      'file_upload', 'file_download',
+      'file_upload', 'file_download', 'file_access',
       'chat_start', 'chat_end',
       'ticket_create', 'ticket_close',
       'note_add', 'rating_submit',

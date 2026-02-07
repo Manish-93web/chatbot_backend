@@ -159,28 +159,51 @@ exports.createChat = async (req, res) => {
     const onlineAgents = await Agent.find({ status: { $in: ['online', 'wrap-up'] } });
     const isOverflow = onlineAgents.length > 0 && onlineAgents.every(a => a.currentChats >= (a.chatLimit || 5));
 
+    // Calculate Queue Position
+    const pendingQuery = {
+      status: isOverflow ? 'overflow' : 'pending',
+      priorityLevel: { $gte: priorityLevel }
+    };
+    if (departmentId) pendingQuery.departmentId = departmentId;
+    if (categoryId) pendingQuery.categoryId = categoryId;
+
+    let queuePosition = isOverflow ? 0 : await Chat.countDocuments(pendingQuery) + 1;
+
+    const estimatedWaitTime = isOverflow ? -1 : queuePosition * 2 * 60; // seconds
+
     // Create chat
     const chat = await Chat.create({
       visitorId,
       departmentId,
       categoryId,
       status: isOverflow ? 'overflow' : 'pending',
-      queuePosition: isOverflow ? 0 : queuePosition,
-      estimatedWaitTime: isOverflow ? -1 : estimatedWaitTime,
+      queuePosition,
+      estimatedWaitTime,
       priorityLevel,
       isPremium,
     });
 
-    // ... existing logic ...
+    // Update visitor chat count
     visitor.numChats += 1;
     await visitor.save();
 
+    const populatedChat = await Chat.findById(chat._id)
+      .populate({
+        path: 'visitorId',
+        select: 'name email sessionId subscriptionId',
+        populate: { path: 'subscriptionId' }
+      })
+      .populate('departmentId', 'name');
+
     res.status(201).json({
       success: true,
-      chat,
+      chat: populatedChat,
+      queuePosition,
+      estimatedWaitTime,
+      priorityLevel,
+      isPremium,
       isOverflow
     });
-
   } catch (error) {
     console.error('Create chat error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -197,13 +220,13 @@ exports.requestCallback = async (req, res) => {
       'callbackRequest.requested': true,
       'callbackRequest.phone': phone,
       'callbackRequest.preferredTime': preferredTime,
-      status: 'completed' // Close chat once callback is requested
     }, { new: true });
 
     if (!chat) return res.status(404).json({ error: 'Chat not found' });
 
     res.json({ success: true, message: 'Callback requested' });
   } catch (error) {
+    console.error('Request callback error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -216,6 +239,7 @@ exports.getOverflowChats = async (req, res) => {
     const chats = await Chat.find({ status: 'overflow' }).populate('visitorId');
     res.json({ success: true, chats });
   } catch (error) {
+    console.error('Get overflow chats error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };

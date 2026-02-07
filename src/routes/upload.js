@@ -5,5 +5,6 @@ const uploadController = require('../controllers/uploadController');
 // const { protect } = require('../middleware/auth');
 
 router.post('/', uploadController.uploadMiddleware, uploadController.uploadFile);
+router.get('/:filename', uploadController.downloadFile);
 
 module.exports = router;

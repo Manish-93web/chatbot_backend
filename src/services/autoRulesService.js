@@ -92,6 +92,46 @@ const startAutoRulesService = () => {
                 });
             }
 
+            // 4. SLA Breach Monitoring
+            const slaThreshold = 5 * 60 * 1000; // 5 mins
+            const breachChats = await Chat.find({
+                status: { $in: ['pending', 'overflow'] },
+                startTime: { $lt: new Date(now - slaThreshold) },
+                'metadata.sla_warned': { $ne: true }
+            });
+
+            for (const chat of breachChats) {
+                io.emit('sla:warning', {
+                    chatId: chat._id,
+                    visitorName: chat.visitorId?.name || 'Visitor',
+                    waitTime: Math.floor((now - chat.startTime) / 60000),
+                    status: chat.status
+                });
+
+                if (!chat.metadata) chat.metadata = new Map();
+                chat.metadata.set('sla_warned', 'true');
+                await chat.save();
+            }
+
+            // 5. Shift Ending Monitoring
+            const soon = new Date(now.getTime() + 30 * 60 * 1000); // 30 mins from now
+            const formatTime = (date) => `${date.getUTCHours().toString().padStart(2, '0')}:${date.getUTCMinutes().toString().padStart(2, '0')}`;
+            const currentTimeStr = formatTime(now);
+            const soonTimeStr = formatTime(soon);
+
+            const activeAgents = await Agent.find({ status: { $ne: 'offline' } });
+            for (const agent of activeAgents) {
+                if (agent.shiftHours && agent.shiftHours.end) {
+                    if (agent.shiftHours.end > currentTimeStr && agent.shiftHours.end <= soonTimeStr) {
+                        // Notify agent their shift is ending
+                        io.to(`agent:${agent._id}`).emit('notification:shift_ending', {
+                            message: `Your shift ends at ${agent.shiftHours.end}. Please start wrapping up your chats.`,
+                            endTime: agent.shiftHours.end
+                        });
+                    }
+                }
+            }
+
         } catch (error) {
             console.error('Auto Rules Service Error:', error);
         }

@@ -49,15 +49,17 @@ const upload = multer({
 });
 
 // Helper to log audit
-const logAudit = async (userId, userType, action, resource, resourceId, changes = {}) => {
+const logAudit = async (userId, userType, action, resource, resourceId, changes = {}, req = null) => {
   try {
     await AuditLog.create({
-      userId,
+      userId: (userId && userId !== 'anonymous' && userId.length === 24) ? userId : undefined,
       userType,
       action,
       resource,
-      resourceId,
-      changes,
+      resourceId: (resourceId && resourceId.toString().length === 24) ? resourceId : undefined,
+      changes: changes.before || changes.after ? changes : { after: changes },
+      ipAddress: req ? req.ip : undefined,
+      userAgent: req ? req.headers['user-agent'] : undefined,
     });
   } catch (error) {
     console.error('Audit log error:', error);
@@ -95,12 +97,15 @@ exports.uploadFile = async (req, res) => {
       'file',
       null,
       {
-        filename: req.file.filename,
-        originalName: req.file.originalname,
-        mimetype: req.file.mimetype,
-        size: req.file.size,
-        scanResult: 'clean'
-      }
+        after: {
+          filename: req.file.filename,
+          originalName: req.file.originalname,
+          mimetype: req.file.mimetype,
+          size: req.file.size,
+          scanResult: 'clean'
+        }
+      },
+      req
     );
 
     res.json({
@@ -123,3 +128,34 @@ exports.uploadFile = async (req, res) => {
 };
 
 exports.uploadMiddleware = upload.single('file');
+
+// Download / Access handler (Audited)
+exports.downloadFile = async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const filePath = path.join(__dirname, '../../uploads', filename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, message: 'File not found' });
+    }
+
+    // Log audit
+    const requesterId = req.headers['x-visitor-id'] || req.user?.id || 'anonymous';
+    const requesterType = req.user ? 'agent' : 'visitor';
+
+    await logAudit(
+      requesterId,
+      requesterType,
+      'file_access',
+      'file',
+      null,
+      { after: { filename } },
+      req
+    );
+
+    res.sendFile(filePath);
+  } catch (error) {
+    console.error('Download error:', error);
+    res.status(500).json({ success: false, message: 'Download failed' });
+  }
+};

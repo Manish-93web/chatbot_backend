@@ -13,16 +13,19 @@ const server = http.createServer(app);
 connectDB();
 
 // Middleware
+// Parse FRONTEND_URL as comma-separated list for multiple origins
+const allowedOrigins = [
+  ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map(url => url.trim()) : []),
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:3002',
+  'http://localhost:3003',
+  'http://localhost:3004',
+  'http://localhost:3005'
+].filter(Boolean);
+
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL,
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:3002',
-    'http://localhost:3003',
-    'http://localhost:3004',
-    'http://localhost:3005'
-  ].filter(Boolean),
+  origin: allowedOrigins,
   credentials: true,
 }));
 app.use(express.json());
